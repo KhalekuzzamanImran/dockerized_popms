@@ -1,0 +1,86 @@
+services:
+  mongo:
+    image: mongo
+    container_name: popms_mongo
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=root
+      - MONOG_INITDB_DATABASE=${MONGO_DB_NAME}
+      - MONGO_INITDB_USERNAME=${MONGO_DB_USER}
+      - MONGO_INITDB_PASSWORD=${MONGO_DB_PASSWORD}
+    volumes:
+      - ${PWD}/_data/mongo:/data/db
+      - ${PWD}/docker/_mongo/fixtures:/import
+      - ${PWD}/docker/_mongo/scripts/init.sh:/docker-entrypoint-initdb.d/setup.sh
+    ports:
+      - 27017:27017
+
+  postgres:
+    container_name: popms_postgres
+    image: postgres:12
+    restart: always
+    env_file: .env
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_DB_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_DB_PASSWORD}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+    ports:
+      - 5432:5432
+    volumes:
+      - ${PWD}/_data/postgres:/var/lib/postgresql/data
+      - ${PWD}/docker/_postgres/scripts/create_test_db.sql:/docker-entrypoint-initdb.d/docker_postgres_init.sql
+
+  redis:
+    image: 'redis:alpine'
+    restart: 'on-failure'
+    expose:
+      - 6379
+
+  broker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: bash -c "cd base/broker && python consumer.py"
+    restart: on-failure
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - .:/opt/app
+
+  popms_backend_celery:
+    build: .
+    command: celery  -A popms worker -l info
+    restart: 'on-failure'
+    depends_on:
+      - 'redis'
+      - 'popms_backend'
+    volumes:
+      - .:/opt/app
+
+  popms_backend_celery-beat:
+    build: .
+    command: celery -A popms beat -l info
+    restart: 'on-failure'
+    depends_on:
+      - 'redis'
+      - 'popms_backend'
+    volumes:
+      - .:/opt/app
+
+  nginx:
+    image: nginx:mainline-alpine
+    restart: always
+    ports:
+      - '8000:8000'
+    volumes:
+      - ./nginx:/etc/nginx/conf.d
+      - staticfiles:/opt/staticfiles
+      - mediafiles:/opt/mediafiles
+    depends_on:
+      - 'popms_backend'
